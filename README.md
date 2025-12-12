@@ -64,6 +64,8 @@ The table shows pipeline runs with status, current step, duration, and timestamp
 - click a **row** → view logs
 - click **Steps** → expand full pipeline steps
 
+<img width="1388" height="827" alt="image" src="https://github.com/user-attachments/assets/d67b3e16-62a6-4834-9b2c-92c6879966d4" />
+
 ---
 
 ## ✅ Available actions (UI)
