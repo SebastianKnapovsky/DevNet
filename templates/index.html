@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<title>Mini DevOps Monitor</title>
+<style>
+  :root { --bg:#0e1117; --card:#161b22; --muted:#99a1b3; --ok:#3bd673; --warn:#ffd43b; --bad:#ff4d4f; }
+  body { font-family: system-ui, Arial; background: var(--bg); color:#e6edf3; margin:0; padding:24px; }
+  h1 { margin:0 0 16px; display:flex; gap:8px; align-items:center; }
+  .row { display:grid; grid-template-columns: repeat(4, minmax(180px,1fr)); gap:12px; }
+  .card { background: var(--card); border-radius:12px; padding:16px; box-shadow: 0 0 0 1px rgba(255,255,255,.04) inset; }
+  .k { font-size:.85rem; color:var(--muted); margin-bottom:6px; }
+  .v { font-size:1.6rem; font-weight:700; }
+  .ok { color: var(--ok) } .bad{color:var(--bad)} .warn{color:var(--warn)}
+  .actions { margin:16px 0 8px; display:flex; flex-wrap:wrap; gap:8px }
+  button { background:#21262d; color:#fff; border:1px solid rgba(255,255,255,.08); padding:8px 14px; border-radius:8px; cursor:pointer }
+  button:hover { background:#2b313a }
+  table { width:100%; border-collapse:collapse; table-layout:fixed; }
+  th, td { padding:10px 12px; border-bottom:1px solid #262b34; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  th { color:#b9c1d0; font-weight:600 }
+  .status-success { color: var(--ok); font-weight:600 }
+  .status-failed  { color: var(--bad); font-weight:600 }
+  .status-running { color: var(--warn); font-weight:600 }
+  .muted { color: var(--muted); }
+  .logs { white-space: pre-wrap; background:#0b0f16; border:1px solid #1f2530; border-radius:8px; padding:12px; max-height:260px; overflow:auto; }
+  .modal { position:fixed; inset:0; background: rgba(0,0,0,.6); display:none; align-items:center; justify-content:center; }
+  .modal > .card { width:min(900px,90vw); }
+</style>
+</head>
+<body>
+  <h1>🧱 Mini DevOps Monitor</h1>
+
+  <div class="row">
+    <div class="card"><div class="k">Deploys today</div><div class="v" id="m-deploys">0</div></div>
+    <div class="card"><div class="k">Success rate (7d)</div><div class="v ok" id="m-success">0%</div></div>
+    <div class="card"><div class="k">Change Failure Rate (7d)</div><div class="v bad" id="m-cfr">0%</div></div>
+    <div class="card"><div class="k">Avg duration</div><div class="v" id="m-avg">0 s</div></div>
+  </div>
+
+  <div class="actions">
+    <button onclick="run('app-ci')">▶ Run pipeline: app-ci</button>
+    <button onclick="run('api-ci')">▶ Run pipeline: api-ci</button>
+    <button onclick="resetData()">🧹 Reset</button>
+    <button onclick="downloadHistory()">⬇ Pobierz historię</button>
+  </div>
+
+  <div class="card">
+    <table>
+      <thead>
+        <tr>
+          <th style="width:10%">Run ID</th>
+          <th style="width:10%">Job</th>
+          <th style="width:12%">Status</th>
+          <th style="width:16%">Current step</th>
+          <th style="width:20%">Steps</th>
+          <th style="width:10%">Duration</th>
+          <th style="width:11%">Started</th>
+          <th style="width:11%">Finished</th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    <div class="muted" style="margin-top:10px;">
+      Kliknij w wiersz, aby zobaczyć logi.
+    </div>
+  </div>
+
+  <div class="modal" id="modal">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <div style="font-weight:700">Run logs</div>
+        <button onclick="closeModal()">✖ Close</button>
+      </div>
+      <div class="logs" id="logbox">Loading…</div>
+    </div>
+  </div>
+
+<script>
+async function stats(){
+  const s = await fetch('/api/stats').then(r=>r.json());
+  document.getElementById('m-deploys').textContent = s.deploys_today ?? 0;
+  document.getElementById('m-success').textContent = (s.success_rate ?? 0) + '%';
+  document.getElementById('m-cfr').textContent = (s.cfr ?? 0) + '%';
+  document.getElementById('m-avg').textContent = (s.avg_duration ?? 0) + ' s';
+}
+
+async function table(){
+  const rows = await fetch('/api/builds').then(r=>r.json());
+  const tb = document.getElementById('tbody');
+
+  tb.innerHTML = rows.map(r=>{
+    const stepsArr = Array.isArray(r.steps) ? r.steps : [];
+    const stepsFull = stepsArr.length ? stepsArr.join(' → ') : '-';
+    const stepsShort = stepsArr.length > 3
+      ? `${stepsArr[0]} → … → ${stepsArr[stepsArr.length - 1]}`
+      : stepsFull;
+
+    const current = r.current_step ? r.current_step : '-';
+    const dur = r.duration_s
+      ? (r.duration_s < 60
+          ? `${r.duration_s}s`
+          : `${Math.floor(r.duration_s / 60)}m ${r.duration_s % 60}s`)
+      : '-';
+
+    const stepsEsc = String(stepsFull).replaceAll("'", "\\'");
+
+    return `
+      <tr onclick="showLogs('${r.id}')">
+        <td>${r.id}</td>
+        <td>${r.job ?? '-'}</td>
+        <td class="status-${r.status}">${r.status}</td>
+        <td>${current}</td>
+        <td title="${stepsFull}" style="max-width:260px; cursor:pointer"
+            onclick="event.stopPropagation(); toggleSteps('${r.id}', '${stepsEsc}')">
+          ${stepsShort}
+        </td>
+        <td>${dur}</td>
+        <td>${r.started_at ?? '-'}</td>
+        <td>${r.finished_at ?? '-'}</td>
+      </tr>`;
+  }).join('');
+}
+
+async function refresh(){
+  await Promise.all([stats(), table()]);
+}
+
+async function resetData(){
+  if(!confirm("Na pewno wyczyścić historię i logi?")) return;
+  await fetch('/api/reset', { method:'POST' });
+  refresh();
+}
+
+async function run(job){
+  await fetch('/api/run', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({job})
+  });
+  refresh();
+}
+
+async function showLogs(id){
+  document.getElementById('modal').style.display = 'flex';
+  document.getElementById('logbox').textContent = 'Loading…';
+  const data = await fetch('/api/logs/'+id).then(r=>r.json());
+  document.getElementById('logbox').textContent = data.log || '(no logs yet)';
+}
+
+function closeModal(){
+  document.getElementById('modal').style.display = 'none';
+}
+
+function downloadHistory(){
+  window.open('/api/history/download', '_blank');
+}
+
+function toggleSteps(runId, stepsFull){
+  const existing = document.getElementById('steps-row-' + runId);
+
+  if(existing){
+    existing.remove();
+    return;
+  }
+
+  const tr = document.querySelector(`tr[onclick="showLogs('${runId}')"]`);
+  if(!tr) return;
+
+  const newRow = document.createElement('tr');
+  newRow.id = 'steps-row-' + runId;
+  newRow.innerHTML = `
+    <td colspan="8" style="padding:12px 12px; background:#0b0f16; border-bottom:1px solid #262b34;">
+      <div style="color:#99a1b3; font-size:0.9rem; margin-bottom:6px;">Steps</div>
+      <div style="white-space:pre-wrap;">${stepsFull}</div>
+    </td>
+  `;
+
+  tr.insertAdjacentElement('afterend', newRow);
+}
+
+refresh();
+setInterval(refresh, 4000);
+</script>
+</body>
+</html>
